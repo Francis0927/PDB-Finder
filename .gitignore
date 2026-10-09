@@ -1,0 +1,17 @@
+# === Build outputs (all intermediates) ===
+[Bb]in/
+[Oo]bj/
+
+# === Visual Studio / Rider state ===
+.vs/
+.idea/
+*.user
+*.suo
+
+# === Test / probe artifacts ===
+probe.obj
+tiny.obj
+
+# === OS ===
+Thumbs.db
+Desktop.ini

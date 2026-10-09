@@ -1,0 +1,56 @@
+<Project>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <RootNamespace>PdbFinder.Vsix</RootNamespace>
+    <AssemblyName>PdbFinder.Vsix</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
+    <DeployExtension>false</DeployExtension>
+    <NuGetAudit>false</NuGetAudit>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>..\PdbFinder.snk</AssemblyOriginatorKeyFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Design" />
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142" PrivateAssets="all" />
+    <ProjectReference Include="..\PdbFinder.Core\PdbFinder.Core.csproj" />
+    <VSCTCompile Include="PdbFinder.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+    </VSCTCompile>
+    <None Include="source.extension.vsixmanifest" />
+    <Content Include="Resources\icon-128.png">
+      <IncludeInVSIX>true</IncludeInVSIX>
+    </Content>
+  </ItemGroup>
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+
+  <UsingTask TaskName="StampVsixVersion" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <ManifestPath Required="true" ParameterType="System.String" />
+      <Version Required="true" ParameterType="System.String" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs">
+        System.Console.WriteLine("StampVsixVersion: stamping " + ManifestPath + " with " + Version);
+        var text = System.IO.File.ReadAllText(ManifestPath);
+        System.IO.File.WriteAllText(ManifestPath, text.Replace("@PdbFinderVersion@", Version));
+        return true;
+      </Code>
+    </Task>
+  </UsingTask>
+
+  <!-- source.extension.vsixmanifest does not expand MSBuild properties; stamp the
+       detokenized intermediate copy with the build version before packaging. -->
+  <Target Name="StampVsixManifestVersion" BeforeTargets="GetVsixSourceItems">
+    <StampVsixVersion ManifestPath="$(IntermediateOutputPath)extension.vsixmanifest" Version="$(PdbFinderVersion)" />
+  </Target>
+  <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" />
+</Project>

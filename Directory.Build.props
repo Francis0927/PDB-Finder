@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <!-- Build-stamped version shared by all three projects: 1.0.<day-of-year>.<HHmm> -->
+    <BuildDays>$([System.DateTime]::Now.DayOfYear)</BuildDays>
+    <BuildMinutes>$([System.DateTime]::Now.ToString("HHmm"))</BuildMinutes>
+    <PdbFinderVersion>1.0.$(BuildDays).$(BuildMinutes)</PdbFinderVersion>
+    <PdbFinderInformationalVersion>$(PdbFinderVersion)+$([System.DateTime]::Now.ToString("yyyy-MM-dd HH:mm"))</PdbFinderInformationalVersion>
+    <Version>$(PdbFinderVersion)</Version>
+    <InformationalVersion>$(PdbFinderInformationalVersion)</InformationalVersion>
+  </PropertyGroup>
+</Project>

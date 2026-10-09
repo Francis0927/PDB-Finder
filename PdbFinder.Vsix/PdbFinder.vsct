@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+  <Commands package="guidPdbFinderPackage">
+    <Groups>
+      <Group guid="guidPdbFinderCommands" id="PdbFinderGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+      </Group>
+    </Groups>
+    <Buttons>
+      <Button guid="guidPdbFinderCommands" id="FindCurrentDump" priority="0x0100" type="Button">
+        <Parent guid="guidPdbFinderCommands" id="PdbFinderGroup" />
+        <Strings><ButtonText>PDB Finder: Match Current Dump</ButtonText></Strings>
+      </Button>
+      <Button guid="guidPdbFinderCommands" id="OpenSettings" priority="0x0110" type="Button">
+        <Parent guid="guidPdbFinderCommands" id="PdbFinderGroup" />
+        <Strings><ButtonText>PDB Finder: Settings</ButtonText></Strings>
+      </Button>
+      <Button guid="guidPdbFinderCommands" id="TestConnection" priority="0x0120" type="Button">
+        <Parent guid="guidPdbFinderCommands" id="PdbFinderGroup" />
+        <Strings><ButtonText>PDB Finder: Test Connection</ButtonText></Strings>
+      </Button>
+      <Button guid="guidPdbFinderCommands" id="RebuildIndex" priority="0x0130" type="Button">
+        <Parent guid="guidPdbFinderCommands" id="PdbFinderGroup" />
+        <Strings><ButtonText>PDB Finder: Rebuild Index</ButtonText></Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+  <Symbols>
+    <GuidSymbol name="guidPdbFinderPackage" value="{23c647b3-872b-4c3c-b693-ed5051b5a16d}" />
+    <GuidSymbol name="guidPdbFinderCommands" value="{cd617d39-32c4-44e7-94a8-f25ba4434264}">
+      <IDSymbol name="PdbFinderGroup" value="0x1020" />
+      <IDSymbol name="FindCurrentDump" value="0x0100" />
+      <IDSymbol name="OpenSettings" value="0x0101" />
+      <IDSymbol name="TestConnection" value="0x0102" />
+      <IDSymbol name="RebuildIndex" value="0x0103" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

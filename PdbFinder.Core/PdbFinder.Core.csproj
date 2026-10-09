@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <NuGetAudit>false</NuGetAudit>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>..\PdbFinder.snk</AssemblyOriginatorKeyFile>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\PdbFinder.Core\PdbFinder.Core.csproj" />
+    <!-- Exercise the VS-independent session lifecycle with the CLI fixtures. -->
+    <Compile Include="..\PdbFinder.Vsix\MatchSession.cs" Link="MatchSession.cs" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+
+</Project>
