@@ -29,7 +29,7 @@ PDB Finder 是一个 Visual Studio 2022 扩展，用于自动准备 Windows C++ 
 
 1. **本地已有 PDB：** 校验 VS 符号缓存、扩展备用缓存及本地 dump 同目录中的预期名称 PDB。只检查这些已知位置，不遍历整台电脑；UNC 和映射网络盘不属于此阶段的本地位置。本地命中无需共享根目录配置。
 2. **本地索引：** 按 GUID+Age 筛选当前共享根目录内的候选，并重新读取候选 PDB 的标识、校验对应 EXE。索引保存的是路径和标识，候选文件可能仍在共享目录，因此这一阶段仍可能产生网络访问。
-3. **共享目录扫描：** 索引没有有效候选时完整枚举归档，重新读取 PDB 身份并更新索引。混合布局及构建内的子目录均会覆盖；未命中后直接提供手动选择，不重复全量扫描。手动选择同样要求 GUID+Age 一致。索引读取或保存失败会记录原因，但不阻断匹配。
+3. **共享目录扫描：** 索引没有有效候选时，边遍历边匹配，各层优先检查最近 30 个子目录；`execute` 分支优先，其余按目录修改时间倒序、同时间按名称倒序。近期未命中再展开暂缓的历史分支，最终覆盖配置根目录内的混合布局及构建子目录，不向根目录外搜索。每个 PDB 重新校验 GUID+Age，命中即停止并更新索引，只有 PDB 没有 EXE 也可返回；全量未命中后提供手动选择。手动重建索引仍扫描全部目录。索引读写失败会记录原因，但不阻断匹配。
 
 ### 安装与配置
 
@@ -48,7 +48,7 @@ PDB Finder 是一个 Visual Studio 2022 扩展，用于自动准备 Windows C++ 
 
 在 **输出 → 显示输出来源：PDB Finder** 查看匹配来源、复制情况和加载结果。**“符号已就绪”表示文件已准备好；“VS 已加载符号”才表示调试器确认加载。** 也可在调试的 **模块（Modules）** 窗口确认主程序的符号状态。
 
-扫描百分比按已完成目录计算，复制进度按字节计算。点击 **取消** 或关闭匹配/索引/复制窗口会停止相应任务；已有的同步网络请求需要返回后才能结束。取消未完成的索引任务会保留已发布的索引。某个共享根目录不可访问时会记录原因，并继续处理其他根目录。
+匹配窗口显示近期优先或历史扩展阶段，以及已检查目录/PDB 数；目录按需展开，不预估全量百分比。手动重建索引的扫描百分比按已完成目录计算，复制进度按字节计算。点击 **取消** 或关闭匹配/索引/复制窗口会停止相应任务；已有的同步网络请求需要返回后才能结束。取消未完成的索引任务会保留已发布的索引。某个共享根目录不可访问时会记录原因，并继续处理其他根目录。
 
 ### 支持范围
 
@@ -75,7 +75,7 @@ PDB Finder is a Visual Studio 2022 extension that prepares main-executable debug
 
 1. **Existing local PDB:** Checks the VS symbol cache, the extension's fallback cache, and the expected PDB filename beside a local dump. It probes these known locations rather than searching the entire computer. UNC locations and mapped network drives are excluded from this local phase. A local hit does not require a shared root to be configured.
 2. **Local index:** Filters candidates by GUID and Age within the currently configured roots, then revalidates the PDB identity and corresponding EXE. The index stores paths and identities, not PDB contents, so validating a candidate may still access a network share.
-3. **Shared-directory scan:** Walks the entire archive, including mixed layouts and nested build directories, and reads current PDB identities before updating the index. A miss offers manual PDB selection without repeating a full scan. Index read/write failures are logged without blocking matching. Manually selected PDBs must also match the GUID and Age.
+3. **Shared-directory scan:** Matches while traversing, checking the most recent 30 child directories at each level first. The `execute` branch takes priority; other children use descending directory modification time, then name. A recent miss expands deferred historical branches until every configured root is covered, including mixed layouts and nested symbol folders. Search stays within those roots. Every PDB identity is revalidated; a match stops the search and updates the index, even without an EXE. A complete miss offers manual selection. Manual index rebuilds still scan everything. Index read/write failures do not block matching; manually selected PDBs must also match the GUID and Age.
 
 ### Installation and configuration
 
@@ -96,7 +96,7 @@ Whenever a PDB needs copying, a topmost progress window opens with the source, d
 
 Select **PDB Finder** in the **Output** window to inspect the match source, copying, and loading results. **“符号已就绪” (symbols ready) means the files are prepared; “VS 已加载符号” (VS loaded symbols) confirms debugger loading.** You can also check the main executable's symbol status in the debugger's **Modules** window.
 
-Scan percentages measure completed directories; copying progress measures bytes. Cancelling or closing the matching/index/copy window stops the corresponding task, after any current synchronous network request returns. Cancelling an unfinished index task preserves the published index. An inaccessible root is reported, and the remaining roots are processed.
+Matching shows the recent-search or history-expansion phase and directory/PDB counts without estimating a total percentage. Manual rebuild percentages measure completed directories; copying progress measures bytes. Cancelling or closing the matching/index/copy window stops the corresponding task, after any current synchronous network request returns. Cancelling an unfinished index task preserves the published index. An inaccessible root is reported, and the remaining roots are processed.
 
 ### Scope
 

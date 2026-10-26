@@ -141,7 +141,7 @@ internal static class IndexLookupChecks
             var scanned = new CandidateFinder(cache).Find(root, module, CancellationToken.None, indexProgress: p => phases.Enqueue(p.Phase));
             Check(!scanned.FromIndex && scanned.Candidate?.PdbPath == pdb, "Missing index must fall back to scanning.");
             Check(phases.Contains(IndexPhase.CheckingIndex) && phases.Contains(IndexPhase.CollectingDirectories)
-                && phases.Contains(IndexPhase.MatchingPdbs), "Progress must include lookup, enumeration and ordinary matching.");
+                && phases.Contains(IndexPhase.MatchingRecentPdbs), "Progress must include lookup, enumeration and recent matching.");
             Check(new CandidateFinder(cache).Find(root, module, CancellationToken.None).FromIndex, "Scan must save an index for the next lookup.");
             Console.WriteLine("PASS: missing index scans with progress and persists the result.");
 
@@ -183,7 +183,7 @@ internal static class IndexLookupChecks
             Check(pdbOnly.FromIndex && pdbOnly.Candidate?.ExePath == null, "PDB-only index hits must remain usable.");
             Console.WriteLine("PASS: PDB-only index hit succeeds without a directory scan.");
 
-            foreach (var cancelPhase in new[] { IndexPhase.CheckingIndex, IndexPhase.CollectingDirectories, IndexPhase.MatchingPdbs })
+            foreach (var cancelPhase in new[] { IndexPhase.CheckingIndex, IndexPhase.CollectingDirectories, IndexPhase.MatchingRecentPdbs })
             {
                 SeedIndex(cache, root, cancelPhase == IndexPhase.CheckingIndex ? pdb : outside);
                 var original = File.ReadAllBytes(cache);
@@ -200,6 +200,7 @@ internal static class IndexLookupChecks
                 Check(original.SequenceEqual(File.ReadAllBytes(cache)), "Cancellation must preserve the published index.");
             }
             Console.WriteLine("PASS: cancellation during lookup, enumeration and matching preserves the index.");
+            RunRecentSearchChecks(workspace, module);
             RunDesignChecks(workspace, module);
         }
         finally
@@ -214,6 +215,98 @@ internal static class IndexLookupChecks
     private static void Check(bool condition, string message)
     {
         if (!condition) throw new Exception(message);
+    }
+
+    private static void RunRecentSearchChecks(string workspace, DumpModule module)
+    {
+        var root = Path.Combine(workspace, "production", "nei", "windows");
+        var execute = Path.Combine(root, "qc_publish", "execute");
+        var builds = Enumerable.Range(0, 65).Select(i => Path.Combine(execute, "build-" + (65 - i).ToString("D3"))).ToArray();
+        var latest = Path.Combine(builds[64], "symbols", "nested");
+        Directory.CreateDirectory(latest);
+        var latestPdb = Path.Combine(latest, "Renamed.pdb");
+        WritePdb(latestPdb, BuildGuid, Age);
+        foreach (var build in builds)
+        {
+            Directory.CreateDirectory(build);
+            if (build != builds[64]) WritePdb(Path.Combine(build, "Old.pdb"), Guid.NewGuid(), Age);
+        }
+        // Timestamp order deliberately opposes the directory names; set it after writing files.
+        var epoch = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < builds.Length; i++) Directory.SetLastWriteTimeUtc(builds[i], epoch.AddDays(i));
+        var cache = Path.Combine(workspace, "recent-search.tsv");
+        var inspectedPaths = new ConcurrentQueue<string>();
+        var phases = new ConcurrentQueue<IndexPhase>();
+        var recent = new CandidateFinder(cache).Find(root, module, CancellationToken.None, indexProgress: p =>
+        {
+            phases.Enqueue(p.Phase);
+            if (p.CurrentPath != null) inspectedPaths.Enqueue(p.CurrentPath);
+        });
+        Check(recent.Candidate?.PdbPath == latestPdb && recent.Candidate.ExePath == null
+            && !phases.Contains(IndexPhase.MatchingPdbs), "A recent nested PDB-only hit must avoid history expansion.");
+        Check(!inspectedPaths.Any(path => builds.Take(35).Any(build => path == build || path.StartsWith(build + Path.DirectorySeparatorChar)))
+            && recent.PdbsInspected == 30, "Only the latest 30 build subtrees may be opened on a recent hit.");
+        Check(new CandidateFinder(cache).Find(root, module, CancellationToken.None).FromIndex,
+            "A partial recent scan must save the match for index reuse.");
+        Console.WriteLine("PASS: recent-30 search uses timestamps, reaches nested/renamed PDBs and avoids old subtrees.");
+
+        var secondRoot = Path.Combine(workspace, "production", "wai", "windows");
+        var secondBuild = Path.Combine(secondRoot, "qc_publish", "execute", "new-build", "symbols");
+        Directory.CreateDirectory(secondBuild);
+        var secondPdb = Path.Combine(secondBuild, "Second.pdb");
+        WritePdb(secondPdb, BuildGuid, Age);
+        WritePdb(latestPdb, Guid.NewGuid(), Age);
+        var historicalPdb = Path.Combine(builds[34], "Old.pdb");
+        WritePdb(historicalPdb, BuildGuid, Age);
+        WriteExe(Path.Combine(builds[34], "Game.exe"));
+        Directory.SetLastWriteTimeUtc(builds[34], epoch.AddDays(34));
+        phases.Clear();
+        var multiple = new CandidateFinder(Path.Combine(workspace, "multiple-recent.tsv")).Find(new[] { root, secondRoot }, module,
+            CancellationToken.None, indexProgress: p => phases.Enqueue(p.Phase));
+        Check(multiple.Candidate?.PdbPath == secondPdb && !phases.Contains(IndexPhase.MatchingPdbs),
+            "Recent candidates in every configured root must precede historical fallback.");
+        Console.WriteLine("PASS: multiple roots receive a recent search before historical fallback.");
+
+        phases.Clear();
+        var history = new CandidateFinder(Path.Combine(workspace, "history-search.tsv")).Find(root, module, CancellationToken.None,
+            indexProgress: p => phases.Enqueue(p.Phase));
+        Check(history.Candidate?.PdbPath == historicalPdb && phases.Contains(IndexPhase.MatchingRecentPdbs)
+            && phases.Contains(IndexPhase.MatchingPdbs), "The 31st build must be found after the recent 30 miss.");
+
+        var sibling = Path.Combine(root, "other-channel", "execute", "old-build");
+        Directory.CreateDirectory(sibling);
+        var siblingPdb = Path.Combine(sibling, "Sibling.pdb");
+        WritePdb(siblingPdb, BuildGuid, Age);
+        WritePdb(historicalPdb, Guid.NewGuid(), Age);
+        Directory.SetLastWriteTimeUtc(builds[34], epoch.AddDays(34));
+        var siblingHit = new CandidateFinder(Path.Combine(workspace, "sibling-search.tsv")).Find(root, module, CancellationToken.None);
+        Check(siblingHit.Candidate?.PdbPath == siblingPdb, "Search must expand to sibling channels within the configured root.");
+        WritePdb(siblingPdb, Guid.NewGuid(), Age);
+        var expectedDirectories = Directory.GetDirectories(root, "*", SearchOption.AllDirectories).Length + 1;
+        var absent = new CandidateFinder(Path.Combine(workspace, "absent-recent.tsv")).Find(
+            new[] { root, root + Path.DirectorySeparatorChar, execute + Path.DirectorySeparatorChar }, module, CancellationToken.None);
+        Check(absent.Candidate == null && absent.DirectoriesVisited == expectedDirectories && absent.PdbsInspected == 66,
+            "A complete miss must scan all recent and historical directories/PDBs exactly once, including overlapping roots.");
+        Console.WriteLine("PASS: recent misses expand to history and sibling channels; full fallback visits each directory/PDB once.");
+
+        var rebuilt = new CandidateFinder(Path.Combine(workspace, "recent-rebuild.tsv")).RebuildIndex(root, CancellationToken.None);
+        Check(rebuilt.DirectoriesVisited == expectedDirectories && rebuilt.PdbsInspected == 66,
+            "Manual rebuilding must still index the entire archive.");
+        var original = File.ReadAllBytes(cache);
+        using (var cancellation = new CancellationTokenSource())
+        {
+            try
+            {
+                new CandidateFinder(cache).Find(root, module, cancellation.Token, indexProgress: p =>
+                {
+                    if (p.Phase == IndexPhase.MatchingPdbs) cancellation.Cancel();
+                });
+                throw new Exception("Historical fallback ignored cancellation.");
+            }
+            catch (OperationCanceledException) { }
+        }
+        Check(original.SequenceEqual(File.ReadAllBytes(cache)), "Cancelling historical fallback must preserve the published index.");
+        Console.WriteLine("PASS: manual rebuild stays complete; cancelling historical fallback preserves the index.");
     }
 
     private static void RunDesignChecks(string workspace, DumpModule module)

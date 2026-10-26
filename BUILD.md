@@ -95,7 +95,7 @@ dotnet run --project PdbFinder.Verify -- "C:\path\crash.dmp" "\\server\PackageBa
 dotnet run --project PdbFinder.Verify -- "C:\path\crash.dmp" "D:\build\HTGame.pdb" "D:\build\HTGame.exe"
 ```
 
-输出中 EXE 一行会标注验证级别：`Exact`、`Repackaged` 或 `None`，判定细节见 [ARCHITECTURE.md](ARCHITECTURE.md)。目录查找先查询 CLI 索引，未命中再完整扫描一次；索引缓存位于 `%TEMP%\pdb-finder-verify-index.tsv`，删除后下一次查找会重新扫描。普通 CLI 查找不读取 VS 符号缓存设置；CLI 与 VSIX 均不会因未命中而自动重建并重复全量扫描。
+输出中 EXE 一行会标注验证级别：`Exact`、`Repackaged` 或 `None`，判定细节见 [ARCHITECTURE.md](ARCHITECTURE.md)。目录查找先查询 CLI 索引，未命中再逐层优先匹配最近 30 个子目录，仍未命中逐步扩展到全部历史；索引缓存位于 `%TEMP%\pdb-finder-verify-index.tsv`，删除后下一次查找会重新扫描。普通 CLI 查找不读取 VS 符号缓存设置；CLI 与 VSIX 均不会因未命中而自动重建并重复全量扫描。
 
 多个根目录可用分号放在同一个参数中：
 
@@ -110,6 +110,8 @@ dotnet run --project PdbFinder.Verify -c Release -- --self-test
 ```
 
 覆盖本地 PDB/EXE 缓存命中、备用缓存和本地 dump 同目录查找、本地 GUID/Age 校验与取消，以及索引直接命中、根目录收窄/范围过滤、PDB 改名、索引缺失、候选删除或身份变化、扫描进度和各扫描阶段取消时保留已有索引。
+
+近期搜索回归使用 nei/windows、wai/windows 双入口夹具，覆盖按时间而非名称选择最近 30 个构建、嵌套 PDB-only 提前返回、跨入口优先搜索近期目录、第 31 个构建及其他频道回退、重叠根及末尾斜杠去重、全量未命中仅扫描一次、手动重建仍全量，以及历史扩展取消时保留原索引。
 
 结构修复回归还覆盖混合归档/构建子目录、重叠根去重、过期负匹配身份与一次扫描、索引锁定/损坏/保存失败降级、EXE 缺失或错误 GUID/Age、远程暂存目录拒绝、四路复制强制重叠、取消 EXE 发布，以及匹配会话在查找结束后统一取消 PDB/EXE worker。会话测试链接实际的 `MatchSession.cs`，不依赖 VS 进程；UI 回调和真实调试加载仍需 VS 内验证。
 
@@ -152,4 +154,4 @@ dotnet run --project PdbFinder.Verify -c Release -- --self-test
 - **调试 dump 时"未找到匹配的二进制"**：先看日志是否标记 `Repackaged`。若 EXE 被重打包，普通 minidump 可按扩展提示确认创建本地修补副本；完整内存 dump 会跳过该提示。没有匹配 EXE、路径不可用或二进制不属于该构建也可能导致此状态，不应仅凭此提示断定重打包。
 - **本地已经有 PDB，索引或共享目录不可用**：当前 VSIX 会先检查本地符号；本地命中不读取索引，也不要求配置共享根目录。确认 PDB 的 GUID+Age、预期文件名和缓存布局，而不是只比较文件名。
 - **有索引但仍发生网络访问**：索引保存候选路径和身份信息，不包含 PDB 文件本体；远程候选仍需重新读取标识并检查 EXE。只有本地 PDB 命中才跳过这一步。
-- **匹配等待时间长或取消未立即结束**：查看进度窗口的当前阶段与路径。归档顶层会触发宽范围递归扫描，优先配置直接包含频道目录的根；同步网络请求必须返回后才能结束取消。
+- **匹配等待时间长或取消未立即结束**：查看进度窗口的当前阶段与路径。近期目录未命中后会扩大到全量归档，优先配置包含所需频道的根以限制搜索范围；同步网络请求必须返回后才能结束取消。

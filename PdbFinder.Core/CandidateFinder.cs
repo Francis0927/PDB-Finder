@@ -47,6 +47,8 @@ namespace PdbFinder.Core
 
     public sealed class CandidateFinder
     {
+        private const int RecentDirectoryLimit = 30;
+
         private sealed class CachedPdb
         {
             public long Length;
@@ -82,7 +84,9 @@ namespace PdbFinder.Core
             PdbCandidate withExe = null;
             var gate = new object();
             var exeName = Path.GetFileName(module.Name);
-            var directories = new List<string>();
+            var pending = new Stack<string>();
+            var deferred = new Stack<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var errors = new List<string>();
             try
             {
@@ -94,89 +98,149 @@ namespace PdbFinder.Core
                     result.FromIndex = true;
                     return result;
                 }
-                progress?.Invoke("本地索引未命中有效候选，开始扫描共享目录…");
-                foreach (var root in roots)
+                progress?.Invoke($"本地索引未命中，优先匹配每层最近 {RecentDirectoryLimit} 个目录…");
+                foreach (var root in roots.Reverse())
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    indexProgress?.Invoke(new IndexProgress(IndexPhase.CollectingDirectories, 0, directories.Count, 0, result.SkippedDirectories, root));
+                    indexProgress?.Invoke(new IndexProgress(IndexPhase.CollectingDirectories, 0, pending.Count, result.PdbsInspected, result.SkippedDirectories, root));
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!Directory.Exists(root)) { errors.Add(root); continue; }
-                    CollectDirectories(root, directories, result, cancellationToken, indexProgress);
+                    var fullRoot = Path.GetFullPath(root);
+                    pending.Push(fullRoot.Length > Path.GetPathRoot(fullRoot).Length
+                        ? fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) : fullRoot);
                 }
                 if (errors.Count != 0) AddError(result, "部分共享目录不可访问：" + string.Join("；", errors));
-                directories = new HashSet<string>(directories, StringComparer.OrdinalIgnoreCase).ToList();
-                if (directories.Count == 0)
+                if (pending.Count == 0)
                 {
                     AddError(result, errors.Count != 0 ? "共享目录不可访问：" + string.Join("；", errors) : "共享根目录中没有可扫描的构建目录。");
                     return result;
                 }
-                directories = directories.OrderByDescending(dir => string.Equals(Path.GetFileName(Path.GetDirectoryName(dir)), "execute", StringComparison.OrdinalIgnoreCase))
-                    .ThenByDescending(dir => Path.GetFileName(dir), StringComparer.OrdinalIgnoreCase).ToList();
                 var inspected = result.PdbsInspected;
                 var visited = 0;
                 var skipped = result.SkippedDirectories;
                 var progressGate = new object();
+                var history = false;
+                var total = 0;
                 Action<string> report = path =>
                 {
                     lock (progressGate)
-                        indexProgress?.Invoke(new IndexProgress(IndexPhase.MatchingPdbs, Volatile.Read(ref visited),
-                            directories.Count, Volatile.Read(ref inspected), Volatile.Read(ref skipped), path));
+                        indexProgress?.Invoke(new IndexProgress(history ? IndexPhase.MatchingPdbs : IndexPhase.MatchingRecentPdbs,
+                            Volatile.Read(ref visited), total, Volatile.Read(ref inspected), Volatile.Read(ref skipped), path));
                 };
-                report(null);
-                Parallel.ForEach(directories, new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = 8 }, (dir, state) =>
+                while (pending.Count != 0 || deferred.Count != 0)
                 {
-                    if (state.ShouldExitCurrentIteration) return;
-                    try
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (pending.Count == 0)
                     {
-                        report(dir);
-                        cancellationToken.ThrowIfCancellationRequested();
-                        string[] files;
-                        try { files = Directory.GetFiles(dir); }
-                        catch (IOException) { Interlocked.Increment(ref skipped); return; }
-                        catch (UnauthorizedAccessException) { Interlocked.Increment(ref skipped); return; }
-
-                        var pdbs = files.Where(f => f.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase)).ToArray();
-                        if (pdbs.Length == 0) return;
-                        var exe = files.FirstOrDefault(f => string.Equals(Path.GetFileName(f), exeName, StringComparison.OrdinalIgnoreCase));
-                        foreach (var pdb in pdbs)
+                        if (!history) progress?.Invoke("近期目录未命中，逐层扩大到历史目录…");
+                        history = true;
+                    }
+                    // Keep older siblings deferred until recent branches have been exhausted.
+                    var next = pending.Count != 0 ? pending : deferred;
+                    var directories = new List<string>();
+                    while (directories.Count < RecentDirectoryLimit && next.Count != 0)
+                    {
+                        var dir = next.Pop();
+                        if (seen.Add(dir)) directories.Add(dir);
+                    }
+                    total = visited + directories.Count;
+                    skipped = result.SkippedDirectories;
+                    report(null);
+                    Parallel.ForEach(directories, new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = 8 }, (dir, state) =>
+                    {
+                        if (state.ShouldExitCurrentIteration) return;
+                        try
                         {
+                            report(dir);
                             cancellationToken.ThrowIfCancellationRequested();
-                            report(pdb);
-                            Interlocked.Increment(ref inspected);
-                            PdbIdentity identity;
-                            // A full archive scan reads current identities, including replacements
-                            // that retained the old file size/time. No rebuild/rescan is needed on a miss.
-                            try { identity = ReadCached(pdb, true); }
-                            catch (IOException) { continue; }
-                            catch (UnauthorizedAccessException) { continue; }
-                            catch (InvalidDataException) { continue; }
-                            if (!module.Pdb.Equals(identity)) continue;
-                            var verification = exe == null ? PeVerification.None : VerifyPe(exe, module);
-                            var candidate = new PdbCandidate(pdb, verification == PeVerification.None ? null : exe, verification);
-                            if (verification != PeVerification.None)
+                            string[] files;
+                            try { files = Directory.GetFiles(dir); }
+                            catch (IOException) { Interlocked.Increment(ref skipped); return; }
+                            catch (UnauthorizedAccessException) { Interlocked.Increment(ref skipped); return; }
+
+                            var pdbs = files.Where(f => f.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase)).ToArray();
+                            if (pdbs.Length == 0) return;
+                            var exe = files.FirstOrDefault(f => string.Equals(Path.GetFileName(f), exeName, StringComparison.OrdinalIgnoreCase));
+                            foreach (var pdb in pdbs)
                             {
-                                lock (gate) { if (withExe == null || (withExe.Verification != PeVerification.Exact && verification == PeVerification.Exact)) withExe = candidate; }
-                                state.Stop();
-                                return;
+                                cancellationToken.ThrowIfCancellationRequested();
+                                report(pdb);
+                                Interlocked.Increment(ref inspected);
+                                PdbIdentity identity;
+                                // Refresh identities even when replacements kept the old file size/time.
+                                try { identity = ReadCached(pdb, true); }
+                                catch (IOException) { continue; }
+                                catch (UnauthorizedAccessException) { continue; }
+                                catch (InvalidDataException) { continue; }
+                                if (!module.Pdb.Equals(identity)) continue;
+                                var verification = exe == null ? PeVerification.None : VerifyPe(exe, module);
+                                var candidate = new PdbCandidate(pdb, verification == PeVerification.None ? null : exe, verification);
+                                if (verification != PeVerification.None)
+                                {
+                                    lock (gate) { if (withExe == null || (withExe.Verification != PeVerification.Exact && verification == PeVerification.Exact)) withExe = candidate; }
+                                    state.Stop();
+                                    return;
+                                }
+                                lock (gate) { if (pdbOnly == null) pdbOnly = candidate; }
                             }
-                            lock (gate) { if (pdbOnly == null) pdbOnly = candidate; }
+                        }
+                        finally
+                        {
+                            var n = Interlocked.Increment(ref visited);
+                            report(dir);
+                            if (n % 25 == 0 || n == total)
+                                progress?.Invoke($"已检查 {n} 个目录、{Volatile.Read(ref inspected)} 个 PDB");
+                        }
+                    });
+                    result.DirectoriesVisited = visited;
+                    result.PdbsInspected = inspected;
+                    result.SkippedDirectories = skipped;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    result.Candidate = withExe ?? pdbOnly;
+                    // GUID+Age suffices; do not walk history just to find a duplicate with an EXE.
+                    if (result.Candidate != null) return result;
+
+                    // Expand only after matching this batch, so a recent hit never walks old subtrees.
+                    foreach (var dir in directories.AsEnumerable().Reverse())
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        indexProgress?.Invoke(new IndexProgress(IndexPhase.CollectingDirectories, visited, seen.Count,
+                            inspected, result.SkippedDirectories, dir));
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var children = GetSearchChildren(dir, result, cancellationToken);
+                        for (var i = children.Length - 1; i >= 0; i--)
+                        {
+                            if (i < RecentDirectoryLimit) pending.Push(children[i]);
+                            else deferred.Push(children[i]);
                         }
                     }
-                    finally
-                    {
-                        var n = Interlocked.Increment(ref visited);
-                        report(dir);
-                        if (n % 25 == 0 || n == directories.Count)
-                            progress?.Invoke($"已检查 {n}/{directories.Count} 个目录、{Volatile.Read(ref inspected)} 个 PDB");
-                    }
-                });
-                result.DirectoriesVisited = visited;
-                result.PdbsInspected = inspected;
-                result.SkippedDirectories = skipped;
-                result.Candidate = withExe ?? pdbOnly;
+                }
                 return result;
             }
             finally { if (!cancellationToken.IsCancellationRequested) TrySaveCache(result, cancellationToken); }
+        }
+
+        private static string[] GetSearchChildren(string directory, FindResult result, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var children = new List<DirectoryInfo>();
+                // DirectoryInfo reuses enumeration metadata rather than querying each child over SMB.
+                foreach (var child in new DirectoryInfo(directory).EnumerateDirectories())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if ((child.Attributes & FileAttributes.ReparsePoint) != 0) { result.SkippedDirectories++; continue; }
+                    children.Add(child);
+                }
+                // shortcut: directory times estimate recency; use a build manifest if backups rewrite/preserve them.
+                return children.OrderByDescending(child => string.Equals(child.Name, "execute", StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(child => child.LastWriteTimeUtc)
+                    .ThenByDescending(child => child.Name, StringComparer.OrdinalIgnoreCase)
+                    .Select(child => child.FullName).ToArray();
+            }
+            catch (IOException) { result.SkippedDirectories++; }
+            catch (UnauthorizedAccessException) { result.SkippedDirectories++; }
+            return new string[0];
         }
 
         private PdbCandidate FindIndexed(IReadOnlyList<string> roots, DumpModule module, FindResult result,

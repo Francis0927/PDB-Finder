@@ -1,6 +1,6 @@
 namespace PdbFinder.Core
 {
-    public enum IndexPhase { CollectingDirectories, ScanningPdbs, SavingIndex, CheckingIndex, MatchingPdbs, CheckingLocalSymbols }
+    public enum IndexPhase { CollectingDirectories, ScanningPdbs, SavingIndex, CheckingIndex, MatchingPdbs, CheckingLocalSymbols, MatchingRecentPdbs }
 
     // Immutable snapshots can be reported by parallel workers and displayed on the UI thread.
     public sealed class IndexProgress

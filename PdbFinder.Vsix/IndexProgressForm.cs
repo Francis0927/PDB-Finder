@@ -192,15 +192,22 @@ namespace PdbFinder.Vsix
                         _hint.Text = "只校验构建标识匹配的文件；有效命中后跳过共享目录扫描。";
                         break;
                     case IndexPhase.CollectingDirectories:
-                        _phase.Text = "阶段 1：收集构建目录";
+                        _phase.Text = _matching ? "按需展开构建目录" : "阶段 1：收集构建目录";
                         _bar.Style = ProgressBarStyle.Marquee;
-                        _counts.Text = $"已发现 {pending.TotalDirectories} 个构建目录，跳过 {pending.SkippedDirectories} 个目录（总数统计中）";
-                        _hint.Text = "正在收集共享目录，总数确定后显示扫描百分比。";
+                        _counts.Text = _matching ? $"已检查 {pending.CompletedDirectories} 个目录、{pending.PdbsInspected} 个 PDB，跳过 {pending.SkippedDirectories} 个目录"
+                            : $"已发现 {pending.TotalDirectories} 个构建目录，跳过 {pending.SkippedDirectories} 个目录（总数统计中）";
+                        _hint.Text = _matching ? "边遍历边匹配，较旧分支暂缓；无需预先遍历整个归档。" : "正在收集共享目录，总数确定后显示扫描百分比。";
+                        break;
+                    case IndexPhase.MatchingRecentPdbs:
+                    case IndexPhase.MatchingPdbs:
+                        _phase.Text = pending.Phase == IndexPhase.MatchingRecentPdbs ? "优先匹配最近目录（每层 30 个）" : "扩大范围：匹配历史目录";
+                        _bar.Style = ProgressBarStyle.Marquee;
+                        _counts.Text = $"已检查 {pending.CompletedDirectories} 个目录、{pending.PdbsInspected} 个 PDB，跳过 {pending.SkippedDirectories} 个目录";
+                        _hint.Text = "命中后停止；未命中逐层扩大范围，直到覆盖配置的全部目录。";
                         break;
                     case IndexPhase.ScanningPdbs:
-                    case IndexPhase.MatchingPdbs:
                         var percent = pending.TotalDirectories == 0 ? 0 : pending.CompletedDirectories * 100.0 / pending.TotalDirectories;
-                        _phase.Text = pending.Phase == IndexPhase.MatchingPdbs ? $"扫描并匹配 PDB（{percent:F0}%）" : $"阶段 2：扫描 PDB（{percent:F0}%）";
+                        _phase.Text = $"阶段 2：扫描 PDB（{percent:F0}%）";
                         _bar.Style = ProgressBarStyle.Continuous;
                         _bar.Value = (int)Math.Min(_bar.Maximum, percent * 10);
                         _hint.Text = "扫描百分比按已完成目录计算；当前路径显示最近处理的目录或 PDB。";
